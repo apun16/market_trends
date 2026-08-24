@@ -1,0 +1,44 @@
+{
+ "switch_velocity": 3.52,
+ "switchers": 74,
+ "eligible": 1646,
+ "reachable": 42,
+ "observed_lead_days": 16,
+ "household_credible_at": "2026-04-01",
+ "attention_credible_at": "2026-04-17",
+ "flagged_merchants": [
+  "m_quickstop"
+ ],
+ "states": {
+  "sig_switch_celsius_alani": "qualified",
+  "sig_zero_fruit_northeast": "qualified",
+  "sig_zero_fruit_southeast": "qualified",
+  "sig_zero_fruit_frequent": "qualified",
+  "sig_zero_fruit_midwest": "qualified",
+  "sig_zero_fruit_southwest": "qualified",
+  "sig_celsius_workout_retention": "qualified",
+  "sig_zero_fruit_west": "emerging",
+  "sig_ghost_promo_spike": "tracking",
+  "sig_share_alani_nu": "candidate",
+  "sig_alani_grocery": "candidate",
+  "sig_share_red_bull": "candidate",
+  "sig_share_celsius": "candidate",
+  "sig_share_ghost": "candidate",
+  "sig_share_c4": "candidate",
+  "sig_c4_online_southwest": "suppressed",
+  "sig_share_monster": "suppressed"
+ },
+ "events": 298835,
+ "promo_trial_claim": [
+  11,
+  20
+ ],
+ "taste_claim": [
+  9,
+  20
+ ],
+ "workout_claim": [
+  3,
+  20
+ ]
+}
