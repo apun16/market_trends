@@ -1,9 +1,3 @@
-"""Research loop: cohort -> study guide -> (simulated) fieldwork -> coded claims with evidence links.
-
-The study guide generator is the deterministic fallback described in the spec: it takes structured
-signal facts and emits a schema-shaped guide with no model call. Fieldwork is simulated from the
-*actual* switcher cohort so the numbers in the brief are the numbers in the data.
-"""
 from __future__ import annotations
 import random
 from .aggregate import Panel
@@ -18,7 +12,7 @@ GUIDE_SCHEMA = {
 
 
 def cohort(p: Panel, signal: dict) -> dict:
-    ids = signal["switcher_ids"]
+    ids = sorted(signal["switcher_ids"])
     reach = [i for i in ids if p.by_id[i].reachable]
     consent = [i for i in reach if p.by_id[i].consented_badge]
     a, b = signal["counter_brand"], signal["primary_brand"]
@@ -107,16 +101,20 @@ TEMPLATES = {
 
 def fieldwork(p: Panel, signal: dict, coh: dict, guide: dict) -> dict:
     rng = random.Random(SEED + 11)
-    ids = [i for i in signal["switcher_ids"] if p.by_id[i].reachable]
+    ids = [i for i in sorted(signal["switcher_ids"]) if p.by_id[i].reachable]
     # stratify: promoted vs full-price first purchase using actual events
     def first_promo(bid):
         ev = sorted((e for e in p.buyer_events[bid] if e.brand == "alani_nu" and e.week >= WEEKS - 2), key=lambda e: e.day)
         return ev[0].promo if ev else None
     promo_ids = [i for i in ids if first_promo(i)]
     full_ids = [i for i in ids if first_promo(i) is False]
+    unknown_ids = [i for i in ids if first_promo(i) is None]
     rng.shuffle(promo_ids); rng.shuffle(full_ids)
-    sample = promo_ids[:11] + full_ids[:9]
-    sample = sample[:20]
+    rng.shuffle(unknown_ids)
+    target = coh["target_completes"]
+    sample = promo_ids[:11]
+    sample += full_ids[:target - len(sample)]
+    sample += unknown_ids[:target - len(sample)]
     responses = []
     for n, bid in enumerate(sample):
         b = p.by_id[bid]

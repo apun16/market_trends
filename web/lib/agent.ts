@@ -5,9 +5,13 @@ import { performance } from "node:perf_hooks";
 import { ANALYSIS_TOOLS, type AnalysisOperation, type AnalysisPlan, type AnalysisResult, type AnalysisRun, type AnalysisTool, type ResultValue } from "./agent-types";
 import { BRAND_KEYS, PERIODS, buildBrandWindow, buildPairSummary, type BrandKey, type BrandWindow, type BuyerBundle, type PairSummary, type Period } from "./dashboard";
 import { getBuyers, getIndustry } from "./data";
+import { calculateWoeIv } from "./feature-engineering";
+import { buildTrendForecast, nextWeeklyLabels } from "./forecast";
 import type { Industry } from "./types";
 
 const MODEL = process.env.OPENAI_MODEL || "gpt-5-nano";
+const OPENAI_TIMEOUT_MS = Math.max(5000, Number(process.env.OPENAI_TIMEOUT_MS) || 45000);
+const OPENAI_REASONING_EFFORT = process.env.OPENAI_REASONING_EFFORT || "minimal";
 const LABELS: Record<BrandKey, string> = {
   celsius: "Celsius", alani_nu: "Alani Nu", monster: "Monster", red_bull: "Red Bull", ghost: "Ghost", c4: "C4",
 };
@@ -108,20 +112,23 @@ async function createPlan(question: string, context: AnalysisContext) {
       input: JSON.stringify({ question, selectedBrands: [LABELS[context.from], LABELS[context.to]], periodWeeks: context.period, approvedTools: ANALYSIS_TOOLS }),
     });
     return { plan: sanitizePlan(raw, question), planner: { mode: "openai" as const, model: MODEL } };
-  } catch {
+  } catch (error) {
+    console.warn(`[openai] planner fallback: ${errorMessage(error)}`);
     return { plan: localPlan(question), planner: { mode: "local" as const, model: null } };
   }
 }
 
 function localPlan(question: string): AnalysisPlan {
   const q = question.toLowerCase();
+  const forecastIntent = /forecast|future|outlook|project|next.*week|time.?series/.test(q);
+  const featureIntent = /feature|predict|woe|weight of evidence|information value|\biv\b/.test(q);
   const operations: AnalysisOperation[] = [];
   const add = (tool: AnalysisTool, purpose: string, dimension: AnalysisOperation["dimension"] = null, order: AnalysisOperation["order"] = null, limit = 8) => {
     if (!operations.some((operation) => operation.tool === tool && operation.dimension === dimension)) operations.push({ id: `op_${operations.length + 1}`, tool, dimension, order, limit, purpose });
   };
 
   if (/slow|lowest|lag/.test(q)) add("segment_switching", "Locate the lowest normalized switching rate.", q.includes("state") ? "state" : "region", "lowest", 8);
-  if (/fast|highest|where.*gain|region/.test(q) && !/slow|lowest|lag/.test(q)) add("segment_switching", "Locate the highest normalized switching rate.", "region", "highest", 8);
+  if (/fast|highest|where.*gain|region/.test(q) && !/slow|lowest|lag/.test(q) && !featureIntent && !forecastIntent) add("segment_switching", "Locate the highest normalized switching rate.", "region", "highest", 8);
   if (/state|geograph|map|lean/.test(q)) add("state_affinity", "Compare relative brand affinity and switch flow by state.", "state", /source|baseline/.test(q) ? "lowest" : "highest", 10);
   if (/promo|durab|repeat|trial|retention/.test(q)) add("promotion_durability", "Separate promotion exposure from observed repeat behavior.");
   if (/interview|recruit|audience|talk to|contact/.test(q)) {
@@ -132,6 +139,8 @@ function localPlan(question: string): AnalysisPlan {
     add("market_context", "Place the brand comparison inside category-level movement.");
     add("brand_performance", "Compare brand penetration, frequency, and change.");
   }
+  if (forecastIntent) add("trend_forecast", "Forecast the selected brands with a validated damped-trend model.");
+  if (featureIntent || /driver/.test(q)) add("feature_diagnostics", "Rank observed cohort features using smoothed Weight of Evidence and Information Value.");
   if (/why|driv|explain|mechanism/.test(q)) {
     add("switching_flow", "Establish the verified behavioral movement.");
     add("segment_switching", "Locate where the movement concentrates.", "channel", "highest", 6);
@@ -222,6 +231,33 @@ function executeOperation(operation: AnalysisOperation, context: AnalysisContext
       sampleSize: destination.categoryBuyers, calculation: "Ranks every tracked brand on observed buyer penetration in the same selected panel window and compares it with the matched prior window.",
       caveat: "Cross-brand penetration is non-exclusive: one buyer may purchase multiple brands." };
   }
+  if (operation.tool === "trend_forecast") {
+    const labels = nextWeeklyLabels(context.industry.weeks.at(-1)!, 8);
+    const forecasts = [source, destination].map((brand) => ({ brand, forecast: buildTrendForecast(brand.weeklyShare, 8) }));
+    return {
+      ...base, title: "Eight-week trend outlook", columns: ["brand", "forecast_week", "projected_share", "lower_90", "upper_90", "change_from_latest_pts"],
+      rows: forecasts.flatMap(({ brand, forecast }) => forecast.points.map((point, index) => ({
+        brand: brand.label, forecast_week: labels[index], projected_share: percent(point.value), lower_90: percent(point.lower), upper_90: percent(point.upper),
+        change_from_latest_pts: signed((point.value - brand.weeklyShare.at(-1)!) * 100),
+      }))),
+      sampleSize: destination.categoryBuyers,
+      calculation: `Damped Holt trend with alpha, beta, and damping selected by ${forecasts[0].forecast.trials} deterministic Bayesian-optimization trials. Objective = rolling one-step MAE across the last 16 observed weeks.`,
+      caveat: `Forecasts extend observed panel buyer share, not causal demand or dollar sales. The 90% residual intervals widen with horizon and do not include structural market shocks. Destination validation MAE is ${(forecasts[1].forecast.validationMae * 100).toFixed(2)} points.`,
+    };
+  }
+  if (operation.tool === "feature_diagnostics") {
+    const diagnostics = calculateWoeIv(context.bundle, context.from, context.to, context.period);
+    const rows = diagnostics.features.flatMap((feature) => feature.bins.map((bin) => ({
+      feature: titleCase(feature.feature), bin: titleCase(bin.bin), switchers: bin.switchers, non_switchers: bin.nonSwitchers,
+      woe: signed(bin.woe), iv_contribution: bin.ivContribution.toFixed(3), feature_iv: feature.iv.toFixed(3), strength: feature.strength,
+    }))).sort((left, right) => Number(right.iv_contribution) - Number(left.iv_contribution)).slice(0, operation.limit || 12);
+    return {
+      ...base, title: "WoE / IV feature diagnostics", columns: ["feature", "bin", "switchers", "non_switchers", "woe", "iv_contribution", "feature_iv", "strength"], rows,
+      sampleSize: diagnostics.sampleSize,
+      calculation: "Within active baseline source buyers, Weight of Evidence = ln(smoothed switcher distribution / smoothed non-switcher distribution). Information Value sums (switcher distribution - non-switcher distribution) x WoE across each feature's bins. Additive smoothing = 0.5 per bin.",
+      caveat: "IV ranks predictive separation, not causality. Promotion exposure is observed in the selected window and may occur after initial switching, so it must not be interpreted as a causal antecedent.",
+    };
+  }
   return {
     ...base, title: "Recruitable switcher cohort", columns: ["cohort", "buyers", "share_of_switchers"],
     rows: [
@@ -280,7 +316,9 @@ async function synthesize(question: string, context: AnalysisContext, plan: Anal
     });
     const candidate = raw as AnalysisRun["answer"];
     if (candidate && typeof candidate.title === "string" && Array.isArray(candidate.findings) && Array.isArray(candidate.caveats)) return candidate;
-  } catch { /* deterministic synthesis remains available */ }
+  } catch (error) {
+    console.warn(`[openai] synthesis fallback: ${errorMessage(error)}`);
+  }
   return localSynthesis(question, context, results);
 }
 
@@ -288,6 +326,14 @@ function localSynthesis(question: string, context: AnalysisContext, results: Ana
   const first = results[0];
   const firstRow = first?.rows[0] ?? {};
   const q = question.toLowerCase();
+  if (first?.tool === "trend_forecast") {
+    const destinationRows = first.rows.filter((row) => row.brand === LABELS[context.to]);
+    const final = destinationRows.at(-1) ?? {};
+    return { title: `${LABELS[context.to]} has an eight-week model outlook grounded in observed buyer share.`, summary: `The final forecast week projects ${final.projected_share} buyer share, with a 90% residual interval of ${final.lower_90} to ${final.upper_90}.`, findings: [`Change from the latest observed week: ${final.change_from_latest_pts} points.`, `${destinationRows.length} future weekly estimates were generated.`, `The model was selected using rolling holdout error, not in-sample fit.`], caveats: [first.caveat] };
+  }
+  if (first?.tool === "feature_diagnostics") {
+    return { title: `${firstRow.feature} contains the strongest displayed predictive separation.`, summary: `${firstRow.bin} has WoE ${firstRow.woe}; the full feature IV is ${firstRow.feature_iv} (${firstRow.strength}).`, findings: first.rows.slice(0, 3).map((row) => `${row.feature} / ${row.bin}: IV contribution ${row.iv_contribution}, ${row.switchers} switchers.`), caveats: [first.caveat] };
+  }
   if (first?.tool === "segment_switching") {
     const segment = String(firstRow.region ?? firstRow.state ?? "The leading segment");
     const rate = String(firstRow.switch_rate ?? "n/a");
@@ -311,14 +357,45 @@ function numbersAreGrounded(answer: AnalysisRun["answer"], results: AnalysisResu
 }
 
 async function callOpenAI({ name, schema, instructions, input }: { name: string; schema: Record<string, unknown>; instructions: string; input: string }): Promise<unknown> {
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: MODEL, instructions, input, text: { format: { type: "json_schema", name, strict: true, schema } } }),
-    signal: AbortSignal.timeout(20000),
-  });
-  if (!response.ok) throw new Error(`Planner request failed: ${response.status}`);
-  const body = await response.json() as { output_text?: string; output?: { content?: { type?: string; text?: string }[] }[] };
+  const started = performance.now();
+  const store = process.env.OPENAI_STORE_RESPONSES !== "false";
+  console.info(`[openai] request stage=${name} model=${MODEL} store=${store}`);
+  let response: Response;
+  try {
+    response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: MODEL,
+        instructions,
+        input,
+        store,
+        metadata: { application: "trends", analysis_stage: name },
+        reasoning: { effort: OPENAI_REASONING_EFFORT },
+        max_output_tokens: name === "analysis_plan" ? 1200 : 1800,
+        text: { format: { type: "json_schema", name, strict: true, schema } },
+      }),
+      signal: AbortSignal.timeout(OPENAI_TIMEOUT_MS),
+    });
+  } catch (error) {
+    console.error(`[openai] network failure stage=${name} duration_ms=${elapsed(started)} error=${errorMessage(error)}`);
+    throw error;
+  }
+
+  const requestId = response.headers.get("x-request-id") ?? "unavailable";
+  const body = await response.json() as {
+    id?: string;
+    output_text?: string;
+    output?: { content?: { type?: string; text?: string }[] }[];
+    usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
+    error?: { code?: string; type?: string; message?: string };
+  };
+  if (!response.ok) {
+    const detail = body.error?.message ?? body.error?.code ?? body.error?.type ?? "unknown API error";
+    console.error(`[openai] API failure stage=${name} status=${response.status} request_id=${requestId} duration_ms=${elapsed(started)} error=${detail}`);
+    throw new Error(`OpenAI ${name} failed (${response.status}): ${detail}`);
+  }
+  console.info(`[openai] response stage=${name} response_id=${body.id ?? "unavailable"} request_id=${requestId} model=${MODEL} duration_ms=${elapsed(started)} input_tokens=${body.usage?.input_tokens ?? "n/a"} output_tokens=${body.usage?.output_tokens ?? "n/a"} total_tokens=${body.usage?.total_tokens ?? "n/a"}`);
   const text = body.output_text ?? body.output?.flatMap((item) => item.content ?? []).find((item) => item.type === "output_text")?.text;
   if (!text) throw new Error("Planner returned no structured output.");
   return JSON.parse(text);
@@ -335,6 +412,7 @@ const planSchema = { type: "object", additionalProperties: false, required: ["ob
 const answerSchema = { type: "object", additionalProperties: false, required: ["title", "summary", "findings", "caveats"], properties: { title: { type: "string" }, summary: { type: "string" }, findings: { type: "array", items: { type: "string" } }, caveats: { type: "array", items: { type: "string" } } } };
 
 function elapsed(start: number) { return Math.max(1, Math.round(performance.now() - start)); }
+function errorMessage(error: unknown) { return error instanceof Error ? error.message : String(error); }
 function percent(value: number) { return `${(value * 100).toFixed(1)}%`; }
 function signed(value: number) { return `${value >= 0 ? "+" : ""}${value.toFixed(Number.isInteger(value) ? 0 : 2)}`; }
 function titleCase(value: string) { return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()); }

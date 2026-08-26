@@ -171,6 +171,28 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .chart .axis { stroke: #d6d8de; }
 .chart .grid { stroke: #ebecef; }
 .chart .line { fill: none; stroke-linejoin: round; stroke-linecap: round; }
+.outlook-panel { overflow: hidden; }
+.outlook-head { min-height: 98px; display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 21px 22px 18px; border-bottom: 1px solid var(--line); }
+.outlook-head > div { max-width: 680px; }
+.outlook-head h2 { margin: 7px 0 5px; font-size: 17px; }
+.outlook-head p { margin: 0; color: var(--muted); font-size: 8px; line-height: 1.5; }
+.outlook-layout { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(250px, .65fr); }
+.outlook-chart { min-width: 0; padding: 7px 18px 5px; border-right: 1px solid var(--line); }
+.outlook-chart .chart-legend { margin-top: 8px; }
+.chart-legend .forecast-key { height: 5px; background: transparent; border-top: 2px dashed; }
+.outlook-readout { display: grid; grid-template-columns: 1fr 1fr; align-content: start; }
+.outlook-readout > div { min-height: 104px; display: flex; flex-direction: column; justify-content: center; padding: 14px 16px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.outlook-readout > div:nth-child(even) { border-right: 0; }
+.outlook-readout > div:nth-last-child(-n+2) { border-bottom: 0; }
+.outlook-readout span { color: var(--faint); font: 550 7px var(--font-mono); text-transform: uppercase; }
+.outlook-readout strong { margin-top: 8px; font-size: 16px; }
+.outlook-readout strong.up { color: #315fc2; }
+.outlook-readout strong.down { color: #6651b9; }
+.outlook-readout strong.flat { color: var(--muted); }
+.outlook-readout small { margin-top: 4px; color: var(--muted); font-size: 7px; line-height: 1.4; }
+.outlook-panel > footer { display: flex; align-items: flex-start; gap: 8px; padding: 11px 18px; border-top: 1px solid #d9e1f3; color: #38518e; background: #f5f8ff; font-size: 7px; line-height: 1.45; }
+.outlook-panel > footer svg { flex: 0 0 auto; }
+.outlook-panel > footer strong { color: var(--ink); }
 .chart .thr { stroke: #a3a7b0; stroke-dasharray: 3 3; }
 .chart .band { fill: var(--lavender); }
 .interactive-chart { cursor: crosshair; touch-action: none; }
@@ -279,11 +301,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .state-map { width: 100%; max-height: 375px; display: block; }
 .state-map path { stroke: #fff; stroke-width: 1.2; vector-effect: non-scaling-stroke; cursor: pointer; transition: fill-opacity .12s, stroke .12s; }
 .state-map path:hover, .state-map path:focus { outline: none; fill-opacity: 1 !important; stroke: #28232f; stroke-width: 1.7; }
-.map-legend { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; margin: 2px 22px 15px; color: var(--faint); font-size: 7px; }
-.map-legend span { display: flex; align-items: center; gap: 6px; }
-.map-legend span:last-child { justify-content: flex-end; }
-.map-legend span i { width: 33px; height: 5px; }
-.map-legend b { color: var(--muted); font: 550 7px var(--font-mono); }
+.map-legend { margin: 2px 22px 15px; padding: 11px 12px; border: 1px solid #dfe4f1; background: #fff; color: var(--faint); }
+.map-legend header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.map-legend header span { color: var(--ink); font-size: 8px; font-weight: 650; }
+.map-legend header small { font: 550 6px var(--font-mono); text-transform: uppercase; }
+.map-legend-scale { height: 7px; margin-top: 9px; border: 1px solid #d6dceb; }
+.map-legend-labels { display: grid; grid-template-columns: 1fr 1fr 1fr; margin-top: 6px; }
+.map-legend-labels span { display: block; }
+.map-legend-labels span:nth-child(2) { color: var(--muted); text-align: center; }
+.map-legend-labels span:last-child { text-align: right; }
+.map-legend-labels strong, .map-legend-labels small { display: block; }
+.map-legend-labels strong { font: 650 7px var(--font-mono); }
+.map-legend-labels small { margin-top: 2px; font-size: 6px; }
+.map-legend p { margin: 9px 0 0; padding-top: 8px; border-top: 1px solid #e8ebf3; color: var(--muted); font-size: 6px; line-height: 1.45; }
 .map-tooltip { min-width: 218px; position: absolute; z-index: 5; top: 14px; right: 14px; padding: 11px 12px; border: 1px solid #393441; border-radius: 4px; background: #211e27; color: #fff; box-shadow: 0 10px 24px rgba(26, 22, 34, .18); pointer-events: none; }
 .map-tooltip span, .map-tooltip strong, .map-tooltip small { display: block; }
 .map-tooltip span { color: #bdb8c8; font: 550 7px var(--font-mono); text-transform: uppercase; }
@@ -649,6 +679,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .study-result-strip > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
   .state-map-layout { grid-template-columns: minmax(0, 1fr) 190px; }
   .profile-grid, .psycho-layout, .behavior-layout { grid-template-columns: 1fr; }
+  .outlook-layout { grid-template-columns: 1fr; }
+  .outlook-chart { border-right: 0; border-bottom: 1px solid var(--line); }
   .state-hotspots { display: grid; grid-template-columns: repeat(2, 1fr); column-gap: 18px; padding: 20px 0 0; border-top: 1px solid var(--line); border-left: 0; }
   .state-hotspots > span, .state-hotspots > h4, .state-hotspots > p { grid-column: 1 / -1; }
   .mindset-readout { min-height: auto; }
@@ -696,6 +728,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .metric > strong { font-size: 20px; }
   .metric-label > span { max-width: 105px; }
   .chart-panel, .flow-panel, .shifts-panel, .geography-panel { padding: 15px; }
+  .outlook-head { align-items: flex-start; flex-direction: column; }
+  .outlook-readout { grid-template-columns: 1fr; }
+  .outlook-readout > div { min-height: 82px; border-right: 0; }
+  .outlook-readout > div:nth-last-child(2) { border-bottom: 1px solid var(--line); }
   .chart-legend { justify-content: flex-start; }
   .chart-note { grid-template-columns: 17px 1fr; }
   .chart-note button { grid-column: 2; width: fit-content; }

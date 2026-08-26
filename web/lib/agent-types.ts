@@ -8,6 +8,8 @@ export const ANALYSIS_TOOLS = [
   "promotion_durability",
   "market_context",
   "recruitment_cohort",
+  "trend_forecast",
+  "feature_diagnostics",
 ] as const;
 
 export type AnalysisTool = (typeof ANALYSIS_TOOLS)[number];

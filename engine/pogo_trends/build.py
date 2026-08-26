@@ -1,4 +1,3 @@
-"""Run everything and write JSON for the web app. `python3 -m pogo_trends.build`"""
 from __future__ import annotations
 import json, pathlib, time
 from .synth import generate, BRAND_LABEL, TODAY, START, N_BUYERS, COVERAGE_GAP, REGIONS, CHANNELS
@@ -32,10 +31,13 @@ def run(out_dir: pathlib.Path = OUT) -> dict:
     FEED_FIELDS = ("id", "title", "state", "kind", "level", "buyers")
     feed = [{k: s[k] for k in FEED_FIELDS} for s in signals]
     meta = {
-        "synthetic": True, "seed": SEED, "detector_version": DETECTOR_VERSION, "generated_at": TODAY.isoformat(),
+        "synthetic": True, "dataset_version": "2.0.0", "seed": SEED,
+        "detector_version": DETECTOR_VERSION, "generated_at": TODAY.isoformat(),
+        "methodology": "Buyer-level longitudinal choice simulation with stable latent preferences, regional availability, channel effects, prices, promotions, and market diffusion.",
         "panel": {"buyers": N_BUYERS, "events": len(events), "weeks": 52, "start": START.isoformat(), "end": TODAY.isoformat(),
                   "brands": list(BRAND_LABEL.values()), "regions": list(REGIONS), "channels": list(CHANNELS)},
         "thresholds": THRESH, "coverage_gap_planted": {"merchant": COVERAGE_GAP["merchant"], "weeks": [week_label(w) for w in COVERAGE_GAP["weeks"]], "retained": COVERAGE_GAP["retained"]},
+        "quality": ind["quality"],
         "build_seconds": round(time.time() - t0, 1),
     }
     golden = {

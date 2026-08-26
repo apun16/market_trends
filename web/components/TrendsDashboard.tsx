@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Activity, ArrowRight, ArrowRightLeft, BarChart3, Beaker, Bot, BrainCircuit, CalendarDays, Check, ChevronDown, CircleHelp, Database,
+  Activity, ArrowRight, ArrowRightLeft, BarChart3, Beaker, Bot, BrainCircuit, CalendarClock, CalendarDays, Check, ChevronDown, CircleHelp, Database,
   Download, FileCheck2, FlaskConical, LayoutDashboard, List, LoaderCircle, Map as MapIcon, MessageSquareText, Search, Send,
   MapPinned, ReceiptText, ShieldCheck, Settings, Sparkles, Table2, TrendingDown, TrendingUp, UserRound, Users, WandSparkles,
 } from "lucide-react";
@@ -11,6 +11,7 @@ import usa from "@svg-maps/usa";
 import { LineChart } from "@/components/charts";
 import type { AnalysisResult, AnalysisRun, ResultValue } from "@/lib/agent-types";
 import type { BrandKey, BrandWindow, DashboardData, PairSummary, Period } from "@/lib/dashboard";
+import { buildTrendForecast, nextWeeklyLabels } from "@/lib/forecast";
 
 type View = "overview" | "switchers" | "study" | "analysis";
 
@@ -25,6 +26,8 @@ const SUGGESTIONS = [
   "Is switching promotion-led or durable?",
   "Which audience should we interview first?",
   "Explain the market trend beyond these brands",
+  "Forecast the next eight weeks for both brands",
+  "Which observed features have the highest WoE and IV?",
 ];
 
 export default function TrendsDashboard({ data, mode = "dashboard" }: { data: DashboardData; mode?: "home" | "dashboard" }) {
@@ -254,6 +257,8 @@ function Overview({ data, period, pair, source, destination, fromLabel, toLabel,
       </article>
     </section>
 
+    <TrendOutlook destination={destination} fromLabel={fromLabel} toLabel={toLabel} weeks={data.industry.weeks} onAsk={onAsk} />
+
     <StateLeanChart pair={pair} source={source} destination={destination} fromLabel={fromLabel} toLabel={toLabel} definition={data.definitions.stateLean} />
 
     <section className="panel shifts-panel">
@@ -261,6 +266,22 @@ function Overview({ data, period, pair, source, destination, fromLabel, toLabel,
       <div className="shift-table">{data.signals.filter((signal) => ["qualified", "emerging"].includes(signal.state)).slice(0, 5).map((signal) => <button key={signal.id} onClick={() => onAsk(`Analyze this shift: ${signal.title}`)}><span className={`status-dot ${signal.state}`} /><div><strong>{signal.title}</strong><small>{signal.kind} / {signal.level}</small></div><b>{signal.buyers.toLocaleString()}</b><span>buyers</span><ChevronDown size={14} /></button>)}</div>
     </section>
   </div>;
+}
+
+function TrendOutlook({ destination, fromLabel, toLabel, weeks, onAsk }: { destination: BrandWindow; fromLabel: string; toLabel: string; weeks: string[]; onAsk: (prompt: string) => void }) {
+  const outlook = buildTrendForecast(destination.weeklyShare, 8);
+  const observed = destination.weeklyShare.slice(-12).map((value) => value * 100);
+  const forecast = outlook.points.map((point) => point.value * 100);
+  const labels = [...weeks.slice(-12), ...nextWeeklyLabels(weeks.at(-1)!, outlook.horizon)];
+  const latest = destination.weeklyShare.at(-1)! * 100;
+  const final = outlook.points.at(-1)!;
+  return <section className="panel outlook-panel">
+    <div className="outlook-head"><div><span className="eyebrow">Future trend outlook / model estimate</span><h2>{toLabel} buyer-share trajectory</h2><p>Eight-week damped trend selected against rolling holdout error. Forecast values are model outputs, never LLM-generated.</p></div><button className="secondary-button" onClick={() => onAsk(`Forecast the next eight weeks for ${fromLabel} and ${toLabel}`)}><WandSparkles size={13} /> Analyze forecast</button></div>
+    <div className="outlook-layout"><div className="outlook-chart"><div className="chart-legend"><span><i style={{ background: COLORS[destination.brand] }} />Observed {toLabel}</span><span><i className="forecast-key" style={{ borderColor: COLORS[destination.brand] }} />Forecast path</span></div><LineChart labels={labels} series={[{ values: observed, color: COLORS[destination.brand], width: 2.5, label: "Observed" }, { values: [...Array(11).fill(null), observed.at(-1), ...forecast], color: COLORS[destination.brand], width: 1.8, dash: true, label: "Forecast" }]} band={{ from: 11, to: 19, label: "8-week forecast" }} yFmt={(value) => `${value.toFixed(0)}%`} tooltipFmt={(value) => `${value.toFixed(2)}%`} height={235} /></div>
+      <aside className="outlook-readout"><div><span>Eight-week direction</span><strong className={outlook.direction}>{outlook.direction === "flat" ? "Stable" : outlook.direction === "up" ? "Rising" : "Softening"}</strong><small>{signed(outlook.delta * 100)} points from {latest.toFixed(2)}%</small></div><div><span>Final projection</span><strong>{pct(final.value)}</strong><small>90% interval {pct(final.lower)} to {pct(final.upper)}</small></div><div><span>Validation error</span><strong>{(outlook.validationMae * 100).toFixed(2)} pts</strong><small>Rolling one-step MAE / 16 holdouts</small></div><div><span>Bayesian tuning</span><strong>{outlook.trials} trials</strong><small>alpha {outlook.parameters.alpha.toFixed(2)} / beta {outlook.parameters.beta.toFixed(2)} / phi {outlook.parameters.phi.toFixed(2)}</small></div></aside>
+    </div>
+    <footer><ShieldCheck size={13} /><span><strong>Interpretation boundary</strong> This extends the observed panel trend. It is not a causal demand forecast and does not anticipate promotions, launches, distribution changes, or other shocks.</span></footer>
+  </section>;
 }
 
 function StateLeanChart({ pair, source, destination, fromLabel, toLabel, definition }: { pair: PairSummary; source: BrandWindow; destination: BrandWindow; fromLabel: string; toLabel: string; definition: string }) {
@@ -295,7 +316,7 @@ function StateLeanMap({ states, source, destination, fromLabel, toLabel, max }: 
       const leaningBrand = row && row.leanPoints >= 0 ? toLabel : fromLabel;
       return <path key={location.id} d={location.path} tabIndex={row ? 0 : -1} aria-label={`${location.name}: ${row ? `${Math.abs(row.leanPoints).toFixed(2)} points toward ${leaningBrand}` : "no data"}`} style={{ fill: row ? (destinationLean ? COLORS[destination.brand] : COLORS[source.brand]) : "#dfe0e4", fillOpacity: row ? intensity : 1 }} onMouseEnter={() => setHovered(row ?? null)} onMouseLeave={() => setHovered(null)} onFocus={() => setHovered(row ?? null)} onBlur={() => setHovered(null)} />;
     })}</svg>
-    <div className="map-legend"><span style={{ color: COLORS[source.brand] }}><i style={{ background: COLORS[source.brand] }} />{fromLabel}</span><b>Relative affinity</b><span style={{ color: COLORS[destination.brand] }}><i style={{ background: COLORS[destination.brand] }} />{toLabel}</span></div>
+    <div className="map-legend"><header><span>Map legend</span><small>Relative state affinity index</small></header><div className="map-legend-scale" style={{ background: `linear-gradient(90deg, ${COLORS[source.brand]} 0%, #eef1f8 50%, ${COLORS[destination.brand]} 100%)` }} /><div className="map-legend-labels"><span style={{ color: COLORS[source.brand] }}><strong>{fromLabel}</strong><small>negative lean</small></span><span><strong>0</strong><small>neutral</small></span><span style={{ color: COLORS[destination.brand] }}><strong>{toLabel}</strong><small>positive lean</small></span></div><p>Darker fill means a larger absolute affinity difference. Hover a state for points, active buyers, and net switches.</p></div>
     {hovered && <div className="map-tooltip"><span>{hovered.state} / {titleCase(hovered.region)}</span><strong>{hovered.leanPoints >= 0 ? toLabel : fromLabel} +{Math.abs(hovered.leanPoints).toFixed(2)} pts</strong><small>{hovered.categoryBuyers.toLocaleString()} active buyers / {signed(hovered.netSwitchers)} net switches</small></div>}
   </div><aside className="map-rankings"><div><span className="eyebrow">Strongest {toLabel} affinity</span>{destinationLeaders.map((state, index) => <p key={state.state}><b>{String(index + 1).padStart(2, "0")}</b><strong>{state.state}</strong><span>{signed(state.leanPoints)} pts</span></p>)}</div><div><span className="eyebrow">Strongest {fromLabel} affinity</span>{sourceLeaders.map((state, index) => <p key={state.state}><b>{String(index + 1).padStart(2, "0")}</b><strong>{state.state}</strong><span>{Math.abs(state.leanPoints).toFixed(2)} pts</span></p>)}</div></aside></div>;
 }
@@ -421,7 +442,7 @@ function Agent({ pair, source, destination, fromLabel, toLabel, query, setQuery,
     <aside className="agent-context">
       <span className="eyebrow">Analysis context</span><h3>{fromLabel} vs. {toLabel}</h3>
       <dl><div><dt>Panel</dt><dd>25,000 buyers</dd></div><div><dt>Window</dt><dd>Latest {pair.period} weeks</dd></div><div><dt>Active category buyers</dt><dd>{destination.categoryBuyers.toLocaleString()}</dd></div><div><dt>Source share</dt><dd>{pct(source.observedShare)}</dd></div><div><dt>Destination share</dt><dd>{pct(destination.observedShare)}</dd></div><div><dt>Qualified switches</dt><dd>{pair.switchers}</dd></div></dl>
-      {answer ? <div className="audit-trace"><header><span className="eyebrow">Analysis trace</span><b><i /> Complete</b></header>{answer.trace.map((step, index) => <div className="trace-step" key={step.id}><span>{index + 1}</span><div><strong>{step.label}</strong><small>{step.detail}</small><em>{step.durationMs} ms{step.rowsScanned ? ` / ${step.rowsScanned.toLocaleString()} rows` : ""}</em></div></div>)}<footer><ShieldCheck size={13} /><span>{answer.planner.mode === "openai" ? `${answer.planner.model} planned and explained; tools supplied all numbers.` : "Local planner active; tools supplied all numbers. Add OPENAI_API_KEY for LLM planning and explanation."}</span></footer></div> : <div className="approved-tools"><span className="eyebrow">Approved operations</span>{["Brand performance", "Switching flow", "Segment rates", "State affinity", "Promotion durability", "Market context"].map((tool) => <div key={tool}><Table2 size={12} /><span>{tool}</span></div>)}</div>}
+      {answer ? <div className="audit-trace"><header><span className="eyebrow">Analysis trace</span><b><i /> Complete</b></header>{answer.trace.map((step, index) => <div className="trace-step" key={step.id}><span>{index + 1}</span><div><strong>{step.label}</strong><small>{step.detail}</small><em>{step.durationMs} ms{step.rowsScanned ? ` / ${step.rowsScanned.toLocaleString()} rows` : ""}</em></div></div>)}<footer><ShieldCheck size={13} /><span>{answer.planner.mode === "openai" ? `${answer.planner.model} planned and explained; tools supplied all numbers.` : "Local planner active; tools supplied all numbers. Add OPENAI_API_KEY for LLM planning and explanation."}</span></footer></div> : <div className="approved-tools"><span className="eyebrow">Approved operations</span>{["Brand performance", "Switching flow", "Segment rates", "State affinity", "Promotion durability", "Market context", "Trend forecast", "WoE / IV diagnostics"].map((tool) => <div key={tool}><Table2 size={12} /><span>{tool}</span></div>)}</div>}
       <div className="context-rule"><ShieldCheck size={14} /><span>Raw rows stay server-side. Explanations are rejected if they introduce a number absent from the executed results.</span></div>
     </aside>
   </div>;

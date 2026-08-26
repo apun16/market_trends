@@ -1,4 +1,3 @@
-"""Industry structure and the Celsius vs Alani Nu matchup — all computed from events."""
 from __future__ import annotations
 from collections import Counter
 from statistics import median
@@ -79,6 +78,43 @@ def industry(p: Panel) -> dict:
     flows = [{"from": a, "to": b, "buyers": n} for (a, b), n in sorted(flow.items(), key=lambda kv: -kv[1])]
     # repertoire: buyers with 2+ brands in current 12w
     multi = sum(1 for bid in cur_cat if len(p.buyer_brand_counts(bid, *CUR12)) >= 2)
+    event_counts = sorted(len(p.buyer_events[b.id]) for b in p.buyers)
+    state_counts = Counter(b.state for b in p.buyers)
+    known_prices = sum(1 for e in p.events if e.regular is not None)
+    known_promos = sum(1 for e in p.events if e.promo is not None)
+
+    def percentile(values, q):
+        return values[round((len(values) - 1) * q)] if values else 0
+
+    quality = {
+        "dataset_version": "2.0.0",
+        "source": "deterministic synthetic longitudinal panel",
+        "generation_model": "buyer-level multinomial-logit brand choice with stable latent preferences",
+        "buyers": len(p.buyers),
+        "events": len(p.events),
+        "active_buyers": sum(1 for value in event_counts if value > 0),
+        "zero_event_buyers": sum(1 for value in event_counts if value == 0),
+        "events_per_buyer": {
+            "p50": percentile(event_counts, .50),
+            "p90": percentile(event_counts, .90),
+            "p99": percentile(event_counts, .99),
+        },
+        "coverage": {
+            "states": len(state_counts),
+            "regions": len({b.region for b in p.buyers}),
+            "channels": len({e.channel for e in p.events}),
+            "smallest_state_panel": min(state_counts.values()),
+            "largest_state_panel": max(state_counts.values()),
+        },
+        "unique_skus": len({e.sku for e in p.events}),
+        "regular_price_completeness": round(known_prices / len(p.events), 4),
+        "promotion_flag_completeness": round(known_promos / len(p.events), 4),
+        "known_limitations": [
+            "Synthetic purchase behavior is suitable for product demonstration, not external market estimation.",
+            "Buyer geography is state-level; no household-level addresses or personally identifying data are generated.",
+            "A documented merchant-feed outage is retained to exercise coverage-quality controls.",
+        ],
+    }
     return {
         "window": {"current": [week_label(CUR12[0]), TODAY.isoformat()], "prior": [week_label(PREV12[0]), week_label(PREV12[1] + 1)]},
         "panel": N_BUYERS, "category_buyers": len(cur_cat), "category_penetration": round(len(cur_cat) / N_BUYERS, 4),
@@ -88,7 +124,7 @@ def industry(p: Panel) -> dict:
                           "reactivated": len(reactivated), "lost": len(lost), "current_buyers": len(cur_cat),
                           "frequency_current": round(f_cur, 3), "frequency_prior": round(f_prev, 3),
                           "repertoire_buyers": multi, "repertoire_share": round(multi / len(cur_cat), 4)},
-        "attributes": attr_rows, "cells": cells, "flows": flows[:24],
+        "attributes": attr_rows, "cells": cells, "flows": flows[:24], "quality": quality,
         "weekly_category_buyers": [len(s) for s in p.cat_week_buyers], "weeks": [week_label(w) for w in range(WEEKS)],
     }
 
@@ -173,13 +209,6 @@ def buyer_summaries(p: Panel) -> dict:
     """Compact multi-window buyer table used by every dashboard calculation."""
     periods = (4, 8, 12, 24, 52)
     short = {"celsius": "celsius", "alani_nu": "alani", "monster": "monster", "red_bull": "redbull", "ghost": "ghost", "c4": "c4", "other": "other"}
-    states = {
-        "northeast": ("ME", "NH", "VT", "MA", "RI", "CT", "NY", "NJ", "PA"),
-        "southeast": ("DE", "MD", "VA", "WV", "NC", "SC", "GA", "FL", "KY", "TN", "AL", "MS", "AR", "LA"),
-        "midwest": ("OH", "IN", "IL", "MI", "WI", "IA", "KS", "MN", "MO", "NE", "ND", "SD"),
-        "southwest": ("TX", "OK", "NM", "AZ", "NV"),
-        "west": ("CA", "OR", "WA", "ID", "MT", "WY", "CO", "UT", "AK", "HI"),
-    }
     cols = ["id", "region", "state", "tier", "occasion", "primary", "reachable", "consent", "channel"]
     for period in periods:
         cols.extend([f"{short[brand]}{period}" for brand in BRANDS])
@@ -190,9 +219,7 @@ def buyer_summaries(p: Panel) -> dict:
     rows = []
     for b in p.buyers:
         buyer_events = p.buyer_events[b.id]
-        state_options = states[b.region]
-        state = state_options[int(b.id[1:]) % len(state_options)]
-        row = [b.id, b.region, state, b.tier, b.occasion, b.primary, 1 if b.reachable else 0, 1 if b.consented_badge else 0, b.channel_pref[0]]
+        row = [b.id, b.region, b.state, b.tier, b.occasion, b.primary, 1 if b.reachable else 0, 1 if b.consented_badge else 0, b.channel_pref[0]]
         for period in periods:
             evs = [e for e in buyer_events if e.week >= WEEKS - period]
             counts = Counter(e.brand for e in evs)

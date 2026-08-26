@@ -1,21 +1,5 @@
-"""Deterministic synthetic energy-drink purchase panel.
-
-25,000 verified buyers, 52 weeks, ~300k events, 7 brand groups, 5 channels, 5 regions.
-Every scenario below is *planted* so the detectors have something real to find — and
-two are planted so the detectors have something real to reject.
-
-Planted cases (see build.py golden metrics for what the detectors recover):
-  S1  Celsius -> Alani Nu switching burst, last 9 days, strongest NE frequent buyers
-  S2  Celsius retention advantage among planned-workout buyers
-  S3  Zero-sugar fruit-flavor attribute diffuses Southeast -> Northeast
-  S4  Convenience trial followed by grocery repeat for Alani Nu switchers
-  S5  Ghost promotion spike (week 38) with no durable repeat
-  S6  Merchant coverage gap (weeks 47-49) that fakes a Monster decline
-  S7  Low-sample cohort: C4 online buyers in the Southwest
-  S8  External attention follows household evidence by 18 days (see detect.attention_series)
-  S9  Interviews include respondents who contradict the leading explanation (research.py)
-"""
 from __future__ import annotations
+import math
 import random
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -33,6 +17,13 @@ BASE_SHARE = {"monster": .30, "red_bull": .25, "celsius": .17, "alani_nu": .10,
               "ghost": .07, "c4": .05, "other": .06}
 REGIONS = {"northeast": .22, "southeast": .26, "midwest": .20, "west": .18, "southwest": .14}
 CHANNELS = {"convenience": .40, "grocery": .30, "mass": .15, "club": .07, "online": .08}
+STATE_WEIGHTS = {
+    "northeast": {"ME": .03, "NH": .03, "VT": .015, "MA": .12, "RI": .02, "CT": .07, "NY": .31, "NJ": .17, "PA": .24},
+    "southeast": {"DE": .02, "MD": .08, "VA": .10, "WV": .03, "NC": .11, "SC": .06, "GA": .10, "FL": .20, "KY": .05, "TN": .07, "AL": .05, "MS": .03, "AR": .03, "LA": .07},
+    "midwest": {"OH": .16, "IN": .10, "IL": .18, "MI": .13, "WI": .09, "IA": .05, "KS": .05, "MN": .08, "MO": .09, "NE": .03, "ND": .02, "SD": .02},
+    "southwest": {"TX": .58, "OK": .12, "NM": .07, "AZ": .18, "NV": .05},
+    "west": {"CA": .58, "OR": .07, "WA": .12, "ID": .03, "MT": .025, "WY": .015, "CO": .09, "UT": .06, "AK": .015, "HI": .015},
+}
 MERCHANTS = {  # merchant -> (channel, brand it over-indexes on)
     "m_quickstop": ("convenience", "monster"), "m_7mart": ("convenience", "red_bull"),
     "m_gasgo": ("convenience", None), "m_freshway": ("grocery", "celsius"),
@@ -44,24 +35,24 @@ COVERAGE_GAP = {"merchant": "m_quickstop", "weeks": (48, 49, 50), "retained": 0.
 
 SKUS = []  # (sku_id, brand, sugar, flavor_family, pack, function)
 def _mk(brand, rows):
-    for i, (sugar, flavor, pack, func) in enumerate(rows):
-        SKUS.append((f"{brand}_{i:02d}", brand, sugar, flavor, pack, func))
-_mk("celsius",  [("zero","fruit","single","energy_fitness"),("zero","fruit","multipack","energy_fitness"),
-                 ("zero","classic","single","energy_fitness"),("zero","dessert","single","energy_fitness"),
-                 ("zero","fruit","single","energy_hydration")])
-_mk("alani_nu", [("zero","fruit","single","energy"),("zero","dessert","single","energy"),
-                 ("zero","fruit","multipack","energy"),("zero","fruit","single","energy_focus")])
-_mk("monster",  [("full","classic","single","energy"),("zero","classic","single","energy"),
-                 ("full","fruit","single","energy"),("zero","fruit","single","energy"),
-                 ("full","classic","multipack","energy"),("zero","classic","multipack","energy")])
-_mk("red_bull", [("full","classic","single","energy"),("zero","classic","single","energy"),
-                 ("full","fruit","single","energy"),("full","classic","multipack","energy")])
-_mk("ghost",    [("zero","dessert","single","energy_focus"),("zero","fruit","single","energy_focus"),
-                 ("zero","fruit","multipack","energy_focus")])
-_mk("c4",       [("zero","fruit","single","energy_fitness"),("zero","classic","single","energy_fitness"),
-                 ("zero","fruit","multipack","energy_fitness")])
-_mk("other",    [("full","classic","single","energy"),("zero","fruit","single","energy"),
-                 ("full","fruit","single","energy")])
+    for slug, sugar, flavor, pack, func in rows:
+        SKUS.append((f"{brand}_{slug}", brand, sugar, flavor, pack, func))
+_mk("celsius",  [("peach_vibe_12oz","zero","fruit","single","energy_fitness"),("variety_12pk","zero","fruit","multipack","energy_fitness"),
+                 ("cola_12oz","zero","classic","single","energy_fitness"),("arctic_vibe_12oz","zero","dessert","single","energy_fitness"),
+                 ("essentials_watermelon_16oz","zero","fruit","single","energy_hydration")])
+_mk("alani_nu", [("hawaiian_shaved_ice_12oz","zero","fruit","single","energy"),("cosmic_stardust_12oz","zero","dessert","single","energy"),
+                 ("variety_12pk","zero","fruit","multipack","energy"),("cherry_slush_12oz","zero","fruit","single","energy_focus")])
+_mk("monster",  [("original_16oz","full","classic","single","energy"),("ultra_white_16oz","zero","classic","single","energy"),
+                 ("mango_loco_16oz","full","fruit","single","energy"),("ultra_strawberry_16oz","zero","fruit","single","energy"),
+                 ("original_12pk","full","classic","multipack","energy"),("ultra_12pk","zero","classic","multipack","energy")])
+_mk("red_bull", [("original_12oz","full","classic","single","energy"),("sugarfree_12oz","zero","classic","single","energy"),
+                 ("summer_edition_12oz","full","fruit","single","energy"),("original_12pk","full","classic","multipack","energy")])
+_mk("ghost",    [("sour_patch_16oz","zero","dessert","single","energy_focus"),("warheads_16oz","zero","fruit","single","energy_focus"),
+                 ("variety_12pk","zero","fruit","multipack","energy_focus")])
+_mk("c4",       [("frozen_bombsicle_16oz","zero","fruit","single","energy_fitness"),("original_16oz","zero","classic","single","energy_fitness"),
+                 ("variety_12pk","zero","fruit","multipack","energy_fitness")])
+_mk("other",    [("legacy_original_16oz","full","classic","single","energy"),("zero_fruit_12oz","zero","fruit","single","energy"),
+                 ("fruit_16oz","full","fruit","single","energy")])
 SKU_BY_BRAND = {b: [s for s in SKUS if s[1] == b] for b in BRANDS}
 SKU_INDEX = {s[0]: s for s in SKUS}
 
@@ -70,6 +61,7 @@ SKU_INDEX = {s[0]: s for s in SKUS}
 class Buyer:
     id: str
     region: str
+    state: str
     tier: str            # light / medium / heavy
     rate_per_week: float
     primary: str
@@ -78,10 +70,13 @@ class Buyer:
     channel_pref: list[str]
     reachable: bool
     consented_badge: bool
-    switched_to_alani_day: int | None = None
-    switch_promo: bool = False
-    churn_day: int | None = None
-    churn_to: str | None = None
+    price_sensitivity: float
+    promo_sensitivity: float
+    loyalty: float
+    variety_seeking: float
+    zero_preference: float
+    fruit_preference: float
+    fitness_affinity: float
 
 
 @dataclass
@@ -105,10 +100,11 @@ class Event:
 
 
 def _pick(rng, weights: dict):
-    r = rng.random()
+    total = sum(max(0.0, value) for value in weights.values())
+    r = rng.random() * total
     acc = 0.0
     for k, w in weights.items():
-        acc += w
+        acc += max(0.0, w)
         if r < acc:
             return k
     return k
@@ -118,29 +114,52 @@ def make_buyers(rng: random.Random) -> list[Buyer]:
     buyers = []
     for i in range(N_BUYERS):
         region = _pick(rng, REGIONS)
-        tier = _pick(rng, {"light": .55, "medium": .30, "heavy": .15})
-        rate = {"light": 5, "medium": 14, "heavy": 35}[tier] / 52 * rng.uniform(0.7, 1.3)
-        occasion = _pick(rng, {"workout": .30, "daily": .55, "social": .15})
+        state = _pick(rng, STATE_WEIGHTS[region])
+        tier = _pick(rng, {"light": .49, "medium": .35, "heavy": .16})
+        annual_rate = {"light": 4.5, "medium": 13.0, "heavy": 31.0}[tier]
+        rate = annual_rate / 52 * rng.lognormvariate(-.03, .26)
+        occasion_weights = {"workout": .27, "daily": .55, "social": .18}
+        if tier == "heavy":
+            occasion_weights["daily"] += .12; occasion_weights["social"] -= .06
+        occasion = _pick(rng, occasion_weights)
+        fitness = min(1.0, max(0.0, rng.betavariate(2.0, 2.5) + (.24 if occasion == "workout" else -.08)))
+        zero = min(1.0, max(0.0, rng.betavariate(2.8, 1.9) + (.12 if fitness > .65 else 0)))
+        fruit = rng.betavariate(2.3, 2.0)
+        price = rng.betavariate(2.2, 2.4)
+        promo = min(1.0, max(0.0, .35 * price + .65 * rng.betavariate(2.0, 2.2)))
+        loyalty = rng.betavariate(4.5, 1.8)
+        variety = min(1.0, max(0.0, 1 - loyalty + rng.uniform(-.12, .18)))
+
         share = dict(BASE_SHARE)
-        if occasion == "workout":       # fitness-positioned brands over-index on workout occasions
-            for b in ("celsius", "c4", "ghost"):
-                share[b] *= 1.8
+        if occasion == "workout":
+            share["celsius"] *= 1.75; share["c4"] *= 1.55; share["ghost"] *= 1.18
+        elif occasion == "social":
+            share["red_bull"] *= 1.45; share["monster"] *= 1.22
+        if zero > .65:
+            for brand in ("celsius", "alani_nu", "ghost", "c4"):
+                share[brand] *= 1.25
         if region == "southeast":
-            share["celsius"] *= 1.15; share["alani_nu"] *= 1.25
-        tot = sum(share.values()); share = {k: v / tot for k, v in share.items()}
+            share["celsius"] *= 1.10; share["alani_nu"] *= 1.18
+        if region == "southwest":
+            share["monster"] *= 1.12; share["c4"] *= 1.12
         primary = _pick(rng, share)
         secondary = None
-        if rng.random() < .45:
+        if rng.random() < .52:
             rest = {k: v for k, v in share.items() if k != primary}
-            t = sum(rest.values()); secondary = _pick(rng, {k: v / t for k, v in rest.items()})
-        ch = list(CHANNELS)
-        rng.shuffle(ch)
-        # bias toward realistic channel: heavy buyers lean convenience, club buyers are rarer
-        pref = sorted(ch, key=lambda c: -CHANNELS[c] * rng.uniform(0.5, 1.5))
+            secondary = _pick(rng, rest)
+        channel_scores = dict(CHANNELS)
+        if tier == "heavy": channel_scores["convenience"] *= 1.35
+        if price > .65: channel_scores["club"] *= 2.0; channel_scores["mass"] *= 1.4
+        if occasion == "workout": channel_scores["online"] *= 1.35; channel_scores["grocery"] *= 1.15
+        pref = sorted(channel_scores, key=lambda channel: -(channel_scores[channel] * rng.uniform(.75, 1.25)))[:3]
+        reachable = rng.random() < .61
         buyers.append(Buyer(
-            id=f"b{i:05d}", region=region, tier=tier, rate_per_week=rate, primary=primary,
+            id=f"b{i:05d}", region=region, state=state, tier=tier, rate_per_week=rate, primary=primary,
             secondary=secondary, occasion=occasion, channel_pref=pref[:3],
-            reachable=rng.random() < .62, consented_badge=rng.random() < .35))
+            reachable=reachable, consented_badge=reachable and rng.random() < .56,
+            price_sensitivity=price, promo_sensitivity=promo, loyalty=loyalty,
+            variety_seeking=variety, zero_preference=zero, fruit_preference=fruit,
+            fitness_affinity=fitness))
     return buyers
 
 
@@ -149,8 +168,81 @@ def _merchant_for(rng, channel, brand):
     w = {}
     for m in cands:
         w[m] = 1.0 + (1.6 if MERCHANTS[m][1] == brand else 0.0)
-    t = sum(w.values())
-    return _pick(rng, {k: v / t for k, v in w.items()})
+    return _pick(rng, w)
+
+
+BRAND_ZERO = {"celsius": 1.0, "alani_nu": 1.0, "monster": .48, "red_bull": .26, "ghost": 1.0, "c4": 1.0, "other": .34}
+BRAND_FRUIT = {"celsius": .72, "alani_nu": .82, "monster": .42, "red_bull": .30, "ghost": .62, "c4": .58, "other": .44}
+BRAND_FITNESS = {"celsius": .92, "alani_nu": .54, "monster": .35, "red_bull": .38, "ghost": .66, "c4": .88, "other": .30}
+EXPECTED_PRICE = {"celsius": 2.75, "alani_nu": 2.70, "monster": 3.15, "red_bull": 3.45, "ghost": 2.95, "c4": 2.85, "other": 2.45}
+
+
+def _promotion_rate(brand: str, week: int, channel: str) -> float:
+    base = .08 if channel in ("convenience", "online") else .14
+    if brand == "ghost" and week == 37:
+        return .68
+    if brand == "alani_nu" and week >= 44 and channel in ("grocery", "mass"):
+        return .24
+    if brand == "red_bull" and 20 <= week <= 28:
+        return .18
+    return base
+
+
+def _brand_utility(buyer: Buyer, brand: str, week: int, channel: str, recent_brand: str | None) -> float:
+    utility = math.log(BASE_SHARE[brand])
+    if brand == buyer.primary:
+        utility += 1.35 + 1.25 * buyer.loyalty
+    elif brand == buyer.secondary:
+        utility += .58
+    if brand == recent_brand:
+        utility += .42 * (1 - buyer.variety_seeking)
+
+    utility += .95 * (buyer.zero_preference - .5) * (BRAND_ZERO[brand] - .5)
+    utility += .72 * (buyer.fruit_preference - .5) * (BRAND_FRUIT[brand] - .5)
+    utility += .90 * (buyer.fitness_affinity - .5) * (BRAND_FITNESS[brand] - .5)
+    utility -= .42 * buyer.price_sensitivity * (EXPECTED_PRICE[brand] - 2.75)
+    utility += 1.65 * buyer.promo_sensitivity * _promotion_rate(brand, week, channel)
+
+    if buyer.occasion == "workout":
+        utility += {"celsius": .48, "c4": .36, "ghost": .16}.get(brand, 0)
+    elif buyer.occasion == "social":
+        utility += {"red_bull": .38, "monster": .28}.get(brand, 0)
+    elif buyer.occasion == "daily":
+        utility += {"alani_nu": .16, "monster": .12}.get(brand, 0)
+
+    channel_fit = {
+        "convenience": {"monster": .35, "red_bull": .32, "alani_nu": -.14},
+        "grocery": {"alani_nu": .24, "celsius": .15},
+        "mass": {"alani_nu": .15, "celsius": .11, "c4": .08},
+        "club": {"monster": .24, "celsius": .16, "red_bull": .10},
+        "online": {"ghost": .46, "c4": .32, "celsius": .12},
+    }
+    utility += channel_fit[channel].get(brand, 0)
+
+    # Gradual innovation-driven adoption. It is strongest among non-workout Celsius
+    # buyers in the Northeast, but remains probabilistic and competes with loyalty.
+    adoption = max(0.0, min(1.0, (week - 34) / 17))
+    if brand == "alani_nu":
+        utility += .42 * adoption
+        if buyer.primary == "celsius" and buyer.occasion != "workout":
+            utility += (1.05 + .45 * buyer.variety_seeking) * adoption
+        if buyer.region == "northeast":
+            utility += .30 * adoption
+    if brand == "celsius" and buyer.occasion == "workout":
+        utility += .28 * adoption
+    if brand in ("celsius", "alani_nu", "ghost", "c4"):
+        utility += .20 * buyer.zero_preference * adoption
+    return utility
+
+
+def _brand_for(rng: random.Random, buyer: Buyer, week: int, channel: str, recent_brand: str | None) -> str:
+    # Independent Gumbel shocks turn utilities into a multinomial-logit draw.
+    scored = {}
+    for brand in BRANDS:
+        u = max(1e-12, min(1 - 1e-12, rng.random()))
+        shock = -math.log(-math.log(u))
+        scored[brand] = _brand_utility(buyer, brand, week, channel, recent_brand) + shock
+    return max(scored, key=scored.get)
 
 
 def _sku_for(rng, brand, buyer: Buyer, day: int):
@@ -158,125 +250,82 @@ def _sku_for(rng, brand, buyer: Buyer, day: int):
     w = []
     week = day // 7
     for s in skus:
-        _, _, sugar, flavor, pack, _ = s
+        _, _, sugar, flavor, pack, func = s
         x = 1.0
+        x *= 1.0 + (buyer.zero_preference - .5) * (1.0 if sugar == "zero" else -1.0)
+        x *= 1.0 + .75 * (buyer.fruit_preference - .5) * (1.0 if flavor == "fruit" else -.35)
+        x *= 1.0 + .65 * (buyer.fitness_affinity - .5) * (1.0 if "fitness" in func else -.25)
         if pack == "multipack":
-            x *= 0.35 if buyer.channel_pref[0] in ("convenience",) else 0.8
-        # S3: zero-sugar fruit flavor diffuses SE (from week 28) -> NE (from week 40)
+            x *= .28 if buyer.channel_pref[0] == "convenience" else 1.05 if buyer.channel_pref[0] in ("club", "online") else .72
+        # Zero-sugar fruit diffuses gradually from the Southeast to the Northeast.
         if sugar == "zero" and flavor == "fruit":
             if buyer.region == "southeast" and week >= 28:
-                x *= 1.0 + min(1.0, (week - 28) / 10) * 1.6
+                x *= 1.0 + min(1.0, (week - 28) / 14) * .75
             if buyer.region == "northeast" and week >= 40:
-                x *= 1.0 + min(1.0, (week - 40) / 8) * 1.9
+                x *= 1.0 + min(1.0, (week - 40) / 10) * .95
             if buyer.tier != "light" and week >= 42:
-                x *= 1.0 + min(1.0, (week - 42) / 8) * 0.9
-        w.append(x)
-    t = sum(w)
-    r = rng.random() * t
-    acc = 0
-    for s, x in zip(skus, w):
-        acc += x
-        if r < acc:
-            return s
-    return skus[-1]
+                x *= 1.0 + min(1.0, (week - 42) / 8) * .35
+        w.append(max(.02, x))
+    return _pick(rng, {sku: weight for sku, weight in zip(skus, w)})
 
 
-PRICE = {"single": 2.79, "multipack": 9.49}
+PACK_PRICE = {"single": 1.0, "multipack": 7.0}
+CHANNEL_PRICE = {"convenience": 1.08, "grocery": .98, "mass": .95, "club": .89, "online": 1.01}
+
+
+def _poisson(rng: random.Random, rate: float) -> int:
+    limit = math.exp(-rate)
+    product = 1.0
+    count = 0
+    while product > limit:
+        count += 1
+        product *= rng.random()
+    return count - 1
 
 
 def generate(seed: int = SEED) -> tuple[list[Buyer], list[Event]]:
     rng = random.Random(seed)
     buyers = make_buyers(rng)
     events: list[Event] = []
-    last_day = WEEKS * 7 - 1
-    switch_window_start = last_day - 8            # S1: movement began 9 days ago
-
     for b in buyers:
-        # S1 hazard: Celsius-primary buyers may switch to Alani Nu inside the burst window
-        if b.primary == "celsius" and b.secondary != "alani_nu":
-            haz = {"northeast": .20, "southeast": .075, "midwest": .04, "west": .035, "southwest": .03}[b.region]
-            haz *= {"heavy": 1.45, "medium": 1.0, "light": 0.5}[b.tier]
-            if b.occasion == "workout":
-                haz *= 0.7                       # S2: workout loyalists switch less
-            if rng.random() < haz:
-                b.switched_to_alani_day = switch_window_start + rng.randint(0, 6)
-                b.switch_promo = rng.random() < .55
-        # background Celsius->Alani switching (baseline rate for the detector)
-        # S2 + realism: some buyers churn from their primary brand mid-year. Everyday-occasion
-        # Celsius buyers churn far more than planned-workout Celsius buyers.
-        churn_p = 0.10
-        if b.primary == "celsius":
-            churn_p = {"workout": 0.05, "daily": 0.24, "social": 0.20}[b.occasion]
-        if b.switched_to_alani_day is None and rng.random() < churn_p:
-            b.churn_day = rng.randint(30 * 7, 44 * 7)
-            rest = {k: v for k, v in BASE_SHARE.items() if k != b.primary}
-            t = sum(rest.values()); b.churn_to = _pick(rng, {k: v / t for k, v in rest.items()})
-
-        # Poisson-ish arrival process by week
+        recent_brand = None
+        first_late_alani_day = None
         for w in range(WEEKS):
-            lam = b.rate_per_week * (1.0 + 0.15 * (1 if 18 <= w <= 34 else -0.5))   # summer seasonality
-            n = 0
-            p = rng.random()
-            # small Poisson sampler
-            L = 2.718281828 ** (-lam); k = 0; pp = 1.0
-            while True:
-                pp *= p if k == 0 else rng.random()
-                if pp < L:
-                    break
-                k += 1
-            days = [w * 7 + rng.randint(0, 6) for _ in range(k)]
-            if b.switched_to_alani_day is not None and b.switched_to_alani_day // 7 == w:
-                days.append(b.switched_to_alani_day)          # the trial purchase itself
+            summer = 1.12 if 18 <= w <= 34 else .96
+            new_year = 1.08 if w <= 5 and b.occasion == "workout" else 1.0
+            rate = b.rate_per_week * summer * new_year * rng.lognormvariate(-.01, .08)
+            days = sorted(w * 7 + rng.randint(0, 6) for _ in range(_poisson(rng, rate)))
             for day in days:
-                # brand choice
-                r = rng.random()
-                if b.switched_to_alani_day is not None and day >= b.switched_to_alani_day:
-                    # S2: workout switchers drift back to Celsius more often
-                    keep = 0.45 if b.occasion == "workout" else 0.75
-                    brand = "alani_nu" if r < keep else ("celsius" if r < 0.95 else _pick(rng, BASE_SHARE))
-                elif b.churn_day is not None and day >= b.churn_day:
-                    brand = b.churn_to if r < .70 else (b.secondary if (b.secondary and r < .85) else _pick(rng, BASE_SHARE))
-                elif r < .75:
-                    brand = b.primary
-                elif r < .95 and b.secondary:
-                    brand = b.secondary
-                else:
-                    brand = _pick(rng, BASE_SHARE)
-                # S5: Ghost promo spike week 38 (index 37): promoted trial with low repeat
-                promo = None
-                if w == 37 and brand != "ghost" and rng.random() < .045:
-                    brand = "ghost"; promo = True
+                channel = _pick(rng, {b.channel_pref[0]: .58, b.channel_pref[1]: .27, b.channel_pref[2]: .15})
+                brand = _brand_for(rng, b, w, channel, recent_brand)
+                if brand == "alani_nu" and b.primary == "celsius" and w >= 40:
+                    if first_late_alani_day is None:
+                        first_late_alani_day = day
+                        if rng.random() < .55:
+                            channel = "convenience"
+                    elif day - first_late_alani_day <= 35 and rng.random() < .52:
+                        channel = "grocery"
+                promo = rng.random() < _promotion_rate(brand, w, channel)
                 sku = _sku_for(rng, brand, b, day)
-                # channel
-                channel = b.channel_pref[0] if rng.random() < .6 else rng.choice(b.channel_pref)
-                if b.switched_to_alani_day is not None and brand == "alani_nu":
-                    # S4: first Alani purchase skews convenience; repeats skew grocery
-                    first = day - b.switched_to_alani_day < 3
-                    channel = "convenience" if (first and rng.random() < .75) else (
-                        "grocery" if rng.random() < .80 else channel)
                 merchant = _merchant_for(rng, channel, brand)
-                # S6: coverage gap
                 if merchant == COVERAGE_GAP["merchant"] and w in COVERAGE_GAP["weeks"] \
                         and rng.random() > COVERAGE_GAP["retained"]:
                     continue
                 pack = SKU_INDEX[sku[0]][4]
-                regular = PRICE[pack] * (0.9 if channel in ("club", "mass") else 1.0)
-                if promo is None:
-                    if b.switched_to_alani_day is not None and brand == "alani_nu" and \
-                            day - b.switched_to_alani_day < 3:
-                        promo = b.switch_promo
-                    else:
-                        promo = rng.random() < (.18 if channel in ("mass", "grocery") else .08)
-                net = round(regular * (0.75 if promo else 1.0), 2)
-                if rng.random() < .07:
-                    regular_out, promo_out = None, None      # unknown regular price for some merchants
+                regular = EXPECTED_PRICE[brand] * PACK_PRICE[pack] * CHANNEL_PRICE[channel] * rng.uniform(.96, 1.05)
+                discount = rng.uniform(.14, .31) if promo else 0.0
+                net = round(regular * (1 - discount), 2)
+                missing_price = .08 if channel == "online" else .035
+                if rng.random() < missing_price:
+                    regular_out, promo_out = None, None
                 else:
                     regular_out, promo_out = round(regular, 2), promo
                 events.append(Event(
                     buyer=b.id, day=day, merchant=merchant, channel=channel, brand=brand,
-                    sku=sku[0], qty=1 if pack == "single" else rng.choice([1, 1, 2]),
+                    sku=sku[0], qty=2 if pack == "single" and rng.random() < .07 else 1,
                     net=net, regular=regular_out, promo=promo_out, geo=b.region,
                     batch=f"batch_{w:02d}"))
+                recent_brand = brand
     events.sort(key=lambda e: (e.day, e.buyer))
     return buyers, events
 
